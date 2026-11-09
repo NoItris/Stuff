@@ -11,13 +11,18 @@ const strip = s => s.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|
 const validCode = c => /^[A-Za-z0-9_-]{3,25}$/.test(c);
 
 // Parser 1: codes stored in data attributes (common on coupon sites)
+const JUNK = new Set(['TRUE','FALSE','NULL','NONE','UNDEFINED','COPY','CODE','COUPON','SHOW','REVEAL','CLICK','DEAL','OFFER','YES','NO']);
+const plausible = c => validCode(c) && /^[A-Z0-9_-]+$/.test(c) && !JUNK.has(c) && c.length >= 4;
+const cleanDesc = t => strip(t).replace(/<[^>]*$/, '').replace(/[<>]/g, '').trim();
 function parseAttrs(html) {
   const out = [], re = /<[^>]+\b(?:data-(?:promo-|coupon-)?code|data-clipboard-text)=["']([^"']{3,25})["'][^>]*>/gi;
   let m;
   while ((m = re.exec(html))) {
-    if (!validCode(m[1])) continue;
-    const desc = strip(html.slice(m.index, m.index + 400)).slice(0, 140);
-    out.push({ code: m[1].toUpperCase(), description: desc });
+    if (!plausible(m[1])) continue;
+    const after = html.slice(m.index + m[0].length, m.index + m[0].length + 400);
+    let desc = cleanDesc(after).slice(0, 120);
+    if (/class=|=\"|style=/.test(desc)) desc = '';
+    out.push({ code: m[1], description: desc });
   }
   return out;
 }
@@ -27,8 +32,8 @@ function parseLd(html) {
   const walk = n => {
     if (!n || typeof n !== 'object') return;
     if (Array.isArray(n)) return n.forEach(walk);
-    if (n.couponCode && validCode(String(n.couponCode)))
-      out.push({ code: String(n.couponCode).toUpperCase(), description: strip(String(n.description || n.name || '')).slice(0, 140) });
+    if (n.couponCode && plausible(String(n.couponCode)))
+      out.push({ code: String(n.couponCode), description: strip(String(n.description || n.name || '')).slice(0, 140) });
     Object.values(n).forEach(walk);
   };
   let m;
@@ -78,5 +83,7 @@ http.createServer(async (req, res) => {
     if (!/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(domain)) return send(res, 400, { error: 'Enter a valid domain like nike.com' });
     return send(res, 200, await lookup(domain));
   }
-  fs.readFile(path.join(__dirname, 'public', 'index.html'), (e, d) => e ? send(res, 404, 'Not found', 'text/plain') : send(res, 200, d, 'text/html; charset=utf-8'));
+  const page = [path.join(__dirname, 'index.html'), path.join(__dirname, 'public', 'index.html')].find(p => fs.existsSync(p));
+  if (!page) return send(res, 404, 'Not found', 'text/plain');
+  fs.readFile(page, (e, d) => e ? send(res, 500, 'Error', 'text/plain') : send(res, 200, d, 'text/html; charset=utf-8'));
 }).listen(PORT, () => console.log(`Code Hunter running at http://localhost:${PORT}`));
