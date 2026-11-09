@@ -10,6 +10,7 @@ const strip = s => s.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|
   .replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 const validCode = c => /^[A-Za-z0-9_-]{3,25}$/.test(c);
 
+// Parser 1: codes stored in data attributes (common on coupon sites)
 function parseAttrs(html) {
   const out = [], re = /<[^>]+\b(?:data-(?:promo-|coupon-)?code|data-clipboard-text)=["']([^"']{3,25})["'][^>]*>/gi;
   let m;
@@ -20,6 +21,7 @@ function parseAttrs(html) {
   }
   return out;
 }
+// Parser 2: schema.org JSON-LD offers with a couponCode
 function parseLd(html) {
   const out = [], re = /<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi;
   const walk = n => {
@@ -34,6 +36,7 @@ function parseLd(html) {
   return out;
 }
 
+// Add or fix providers here. The URL host is fixed, so users can't point the server elsewhere.
 const PROVIDERS = [
   { name: 'CouponFollow', url: d => `https://couponfollow.com/site/${d}`, parse: h => [...parseLd(h), ...parseAttrs(h)] },
   { name: 'RetailMeNot', url: d => `https://www.retailmenot.com/view/${d}`, parse: h => [...parseLd(h), ...parseAttrs(h)] },
@@ -62,10 +65,7 @@ async function lookup(domain) {
   return v;
 }
 
-const send = (res, code, body, type = 'application/json') => {
-  res.writeHead(code, { 'Content-Type': type });
-  res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
-};
+const send = (res, code, body, type = 'application/json') => { res.writeHead(code, { 'Content-Type': type }); res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)); };
 
 http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
@@ -75,4 +75,8 @@ http.createServer(async (req, res) => {
     if (arr.length >= 20) return send(res, 429, { error: 'Too many requests, slow down.' });
     hits.set(ip, [...arr, now]);
     const domain = (u.searchParams.get('site') || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[\/?#]/)[0];
-    if (!/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(domain
+    if (!/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/.test(domain)) return send(res, 400, { error: 'Enter a valid domain like nike.com' });
+    return send(res, 200, await lookup(domain));
+  }
+  fs.readFile(path.join(__dirname, 'public', 'index.html'), (e, d) => e ? send(res, 404, 'Not found', 'text/plain') : send(res, 200, d, 'text/html; charset=utf-8'));
+}).listen(PORT, () => console.log(`Code Hunter running at http://localhost:${PORT}`));
